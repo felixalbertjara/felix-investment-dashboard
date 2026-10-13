@@ -15,7 +15,7 @@
     ]
   },
   "vars": {
-    "GITHUB_OWNER": "REEMPLAZAR_OWNER",
+    "GITHUB_OWNER": "felixalbertjara",
     "GITHUB_REPO": "felix-investment-dashboard",
     "GITHUB_BRANCH": "main"
   },
@@ -23,14 +23,14 @@
     {
       "binding": "DB",
       "database_name": "felix-dashboard-db",
-      "database_id": "REEMPLAZAR_DATABASE_ID",
+      "database_id": "3776a5e0-ab33-4856-af98-054f1ccc3232",
       "migrations_dir": "migrations"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "SNAPSHOTS",
-      "id": "REEMPLAZAR_KV_NAMESPACE_ID"
+      "id": "729e69a2346b4017bce788b02cd60fb7"
     }
   ]
 }
