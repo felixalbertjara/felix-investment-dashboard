@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "felix-investment-dashboard",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "triggers": {
+    "crons": [
+      "*/5 14-19 * * 1-5",
+      "0 20 * * 1-5"
+    ]
+  },
+  "vars": {
+    "GITHUB_OWNER": "REEMPLAZAR_OWNER",
+    "GITHUB_REPO": "felix-investment-dashboard",
+    "GITHUB_BRANCH": "main"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "felix-dashboard-db",
+      "database_id": "REEMPLAZAR_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SNAPSHOTS",
+      "id": "REEMPLAZAR_KV_NAMESPACE_ID"
+    }
+  ]
+}

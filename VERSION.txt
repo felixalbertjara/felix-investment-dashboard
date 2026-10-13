@@ -1,0 +1,11 @@
+Felix Investment Dashboard V3.1 Serverless
+Build: 2026-10-13
+Horario: 11:00-17:00 America/Argentina/Buenos_Aires
+Cartera: cada 5 min
+Radar: cada 15 min
+Estado fuerte: Cloudflare D1
+Snapshots grandes: Cloudflare Workers KV
+Compute: GitHub Actions
+Scheduler/Web: Cloudflare Workers
+
+Regla de ejecución: lunes a viernes 11:00-17:00 ART, sin calendario anual de feriados.
