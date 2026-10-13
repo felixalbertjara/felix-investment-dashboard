@@ -1,0 +1,45 @@
+name: Portfolio scan
+run-name: Portfolio scan ${{ inputs.slot || inputs.reason || 'manual' }}
+
+"on":
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Motivo del disparo
+        required: false
+        type: string
+      slot:
+        description: Slot ART
+        required: false
+        type: string
+      scheduled_at:
+        description: Timestamp autorizado por Cloudflare
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: felix-portfolio-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan cartera
+        working-directory: scanner
+        env:
+          SCAN_MODE: portfolio
+          SCAN_AT: ${{ inputs.scheduled_at }}
+          DASHBOARD_API_URL: ${{ secrets.DASHBOARD_API_URL }}
+          SCANNER_SECRET: ${{ secrets.SCANNER_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          chmod +x ./felix_dashboard_scanner
+          ./felix_dashboard_scanner serverless-scan
