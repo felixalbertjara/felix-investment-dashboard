@@ -32,15 +32,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Scan radar
+      - name: Scan radar sin alertas Telegram
         working-directory: scanner
         env:
           SCAN_MODE: radar
           SCAN_AT: ${{ inputs.scheduled_at }}
           DASHBOARD_API_URL: ${{ secrets.DASHBOARD_API_URL }}
           SCANNER_SECRET: ${{ secrets.SCANNER_SECRET }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           chmod +x ./felix_dashboard_scanner
           ./felix_dashboard_scanner serverless-scan
