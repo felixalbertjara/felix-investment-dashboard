@@ -3,9 +3,7 @@
   "name": "felix-investment-dashboard",
   "main": "src/index.js",
   "compatibility_date": "2026-10-01",
-
   "keep_vars": true,
-
   "secrets": {
     "required": [
       "DASHBOARD_USER",
@@ -14,26 +12,22 @@
       "GITHUB_TOKEN"
     ]
   },
-
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": true
   },
-
   "triggers": {
     "crons": [
       "*/5 14-19 * * 1-5",
       "0 20 * * 1-5"
     ]
   },
-
   "vars": {
     "GITHUB_OWNER": "felixalbertjara",
     "GITHUB_REPO": "felix-investment-dashboard",
     "GITHUB_BRANCH": "main"
   },
-
   "d1_databases": [
     {
       "binding": "DB",
@@ -42,7 +36,6 @@
       "migrations_dir": "migrations"
     }
   ],
-
   "kv_namespaces": [
     {
       "binding": "SNAPSHOTS",
