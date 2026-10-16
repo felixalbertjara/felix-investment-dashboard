@@ -217,6 +217,30 @@ async function handleApi(request, env, url, ctx) {
     return json({ ok: true });
   }
 
+
+  if (request.method === 'POST' && url.pathname === '/api/radar/refresh') {
+    const now = new Date();
+    const status = await marketStatus(env.DB, now);
+    if (!status.open) return json({ error: `Radar manual disponible sólo lunes a viernes 11:00-17:00 ART (${status.reason}).` }, 409);
+
+    const last = await getMeta(env.DB, 'last_manual_radar_dispatch_at');
+    if (last) {
+      const ageMs = now.getTime() - new Date(last).getTime();
+      if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < 90_000) {
+        return json({ error: `Ya pediste un radar hace ${Math.ceil(ageMs/1000)}s. Esperá un momento para no duplicar scans.` }, 429);
+      }
+    }
+
+    const previousSnapshotAt = await getMeta(env.DB, 'market_snapshot_updated_at');
+    await dispatchWorkflow(env, 'radar.yml', {
+      reason: 'dashboard-refresh-radar',
+      slot: `${status.date} ${status.time}`,
+      scheduled_at: now.toISOString(),
+    });
+    await setMeta(env.DB, 'last_manual_radar_dispatch_at', now.toISOString());
+    return json({ ok: true, previous_snapshot_at: previousSnapshotAt || '', message: 'Radar nuevo solicitado. GitHub Actions está recalculando todo.' });
+  }
+
   if (request.method === 'POST' && url.pathname === '/api/test-alert') {
     ctx.waitUntil(dispatchWorkflow(env, 'test-alert.yml', { reason: 'dashboard-button' }));
     return json({ ok: true, message: 'Prueba enviada a GitHub Actions' });
@@ -237,7 +261,7 @@ async function savePortfolio(env, body) {
   const buyDate = String(body.buy_date || '').trim() || artDate(new Date());
   const notes = String(body.notes || '').trim();
   const strategy = String(body.strategy || 'SWING').toUpperCase() === 'POSITION' ? 'POSITION' : 'SWING';
-  const expectedDays = Math.max(5, Math.min(365, Number(body.expected_days || (strategy === 'POSITION' ? 120 : 45))));
+  const expectedDays = Math.max(5, Math.min(365, Number(body.expected_days || (strategy === 'POSITION' ? 120 : 15))));
   const manualStop = Number(body.initial_stop_price || 0);
   if (!ticker || !(amount > 0) || !(price > 0)) return { error: 'ticker, ARS y precio son obligatorios' };
 
