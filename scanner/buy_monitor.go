@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultBuyMonitorInterval = 12 * time.Minute
-	defaultBuyMinScore        = 9
+	defaultBuyMinScore        = 90
 	buyNotifyCooldown         = 12 * time.Hour
 )
 
@@ -34,6 +34,7 @@ type BuyAlertState struct {
 
 type buyCandidate struct {
 	Result Result
+	V4     V4Analysis
 	State  BuyAlertState
 }
 
@@ -50,7 +51,7 @@ func buyMonitorInterval() time.Duration {
 
 func buyMinScore() int {
 	if raw := strings.TrimSpace(os.Getenv("FELIX_BUY_MIN_SCORE")); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 5 && n <= 15 {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 80 && n <= 100 {
 			return n
 		}
 	}
@@ -183,7 +184,17 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 			continue
 		}
 
-		strong := deep && r.Quote.Price > 0 && r.Recommendation == "COMPRAR MUCHO" && r.ScoreFinal >= threshold
+		v4 := V4Analysis{}
+		if deep && r.Quote.Price > 0 {
+			v4 = evaluateV4(r)
+			st.Recommendation = v4.RecommendationV4
+			st.Score = v4.TradingScore
+			if len(v4.V4Reasons) > 0 {
+				st.LastReason = v4.V4Reasons[0]
+			}
+		}
+		// V4: Telegram sólo se activa para la señal rara que pasa TODOS los hard gates.
+		strong := deep && r.Quote.Price > 0 && v4.StrongBuy && v4.TradingScore >= threshold
 
 		if strong {
 			st.PendingCancel = 0
@@ -193,14 +204,14 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 			}
 			if st.PendingStrong >= 2 {
 				shouldNotify := !st.ActiveStrongAlert
-				if st.ActiveStrongAlert && !st.LastNotifiedAt.IsZero() && time.Since(st.LastNotifiedAt) >= buyNotifyCooldown && r.ScoreFinal >= st.LastNotifiedScore+2 {
+				if st.ActiveStrongAlert && !st.LastNotifiedAt.IsZero() && time.Since(st.LastNotifiedAt) >= buyNotifyCooldown && v4.TradingScore >= st.LastNotifiedScore+3 {
 					shouldNotify = true
 				}
 				if shouldNotify {
 					st.ActiveStrongAlert = true
 					st.LastNotifiedAt = now
-					st.LastNotifiedScore = r.ScoreFinal
-					newBuys = append(newBuys, buyCandidate{Result: r, State: st})
+					st.LastNotifiedScore = v4.TradingScore
+					newBuys = append(newBuys, buyCandidate{Result: r, V4: v4, State: st})
 				}
 			}
 		} else {
@@ -213,7 +224,7 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 				if st.PendingCancel >= 2 {
 					st.ActiveStrongAlert = false
 					st.PendingCancel = 0
-					cancelled = append(cancelled, buyCandidate{Result: r, State: st})
+					cancelled = append(cancelled, buyCandidate{Result: r, V4: v4, State: st})
 				}
 			} else {
 				st.PendingCancel = 0
@@ -225,23 +236,28 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 	saveBuyStates(states)
 
 	if len(newBuys) > 0 {
-		sort.Slice(newBuys, func(i, j int) bool { return newBuys[i].Result.ScoreFinal > newBuys[j].Result.ScoreFinal })
+		sort.Slice(newBuys, func(i, j int) bool { return newBuys[i].V4.TradingScore > newBuys[j].V4.TradingScore })
 		if len(newBuys) > 5 {
 			newBuys = newBuys[:5]
 		}
 		var b strings.Builder
 		b.WriteString("🚀 FELIX CLOUD · OPORTUNIDAD DE COMPRA CONFIRMADA\n\n")
 		for i, c := range newBuys {
-			r := c.Result
-			fmt.Fprintf(&b, "%d) %s · %s · score %d\n", i+1, r.Asset.Ticker, r.Recommendation, r.ScoreFinal)
-			fmt.Fprintf(&b, "Precio: %s · RSI %.1f · 4H RSI %.1f\n", money(r.Quote.Price), r.RSI, r.FastRSI)
-			fmt.Fprintf(&b, "Tend %d · Mom %d · Vol %d · Zona %d · 4H %d\n", r.ScoreTrend, r.ScoreMomentum, r.ScoreVolume, r.ScoreLocation, r.ScoreTiming)
+			r, v4 := c.Result, c.V4
+			fmt.Fprintf(&b, "%d) %s · %s\n", i+1, r.Asset.Ticker, v4.RecommendationV4)
+			fmt.Fprintf(&b, "Trading %d/100 · Largo %d/100 · %s\n", v4.TradingScore, v4.LongScore, v4.TradeSetup)
+			fmt.Fprintf(&b, "Precio: %s · R/R %.2f:1 · ADX %.1f\n", money(r.Quote.Price), v4.RewardRisk, v4.ADX)
+			fmt.Fprintf(&b, "Ventana esperada: %s · Benchmark %s\n", v4.ExpectedWindow, v4.BenchmarkTicker)
+			fmt.Fprintf(&b, "Fuerza relativa: 20r %+0.1f%% · 60r %+0.1f%%\n", v4.RelativeStrength20, v4.RelativeStrength60)
 			if r.UnderlyingTicker != "" {
 				fmt.Fprintf(&b, "Underlying %s: score %d · CCL20 %.1f%%\n", r.UnderlyingTicker, r.UnderlyingScore, r.CCLChange20Pct)
 			}
-			fmt.Fprintf(&b, "Motivo: %s\n\n", firstReason(r.Reasons))
+			if len(v4.V4Reasons) > 0 {
+				fmt.Fprintf(&b, "Motivo: %s\n", v4.V4Reasons[0])
+			}
+			fmt.Fprintln(&b)
 		}
-		b.WriteString("Acción: revisar puntas/spread en Balanz antes de ejecutar. La señal no garantiza ganancia.")
+		b.WriteString("Acción: revisar puntas/spread en Balanz antes de ejecutar. Es una señal excepcional, no una garantía de ganancia.")
 		if configured {
 			if err := sendTelegramMessage(b.String()); err != nil {
 				log.Println("Buy monitor Telegram:", err)
@@ -250,7 +266,7 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 	}
 
 	if len(cancelled) > 0 {
-		sort.Slice(cancelled, func(i, j int) bool { return cancelled[i].Result.ScoreFinal < cancelled[j].Result.ScoreFinal })
+		sort.Slice(cancelled, func(i, j int) bool { return cancelled[i].V4.TradingScore < cancelled[j].V4.TradingScore })
 		if len(cancelled) > 5 {
 			cancelled = cancelled[:5]
 		}
@@ -258,7 +274,7 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 		b.WriteString("⚪ FELIX CLOUD · SEÑAL DE COMPRA CANCELADA\n\n")
 		for _, c := range cancelled {
 			r := c.Result
-			fmt.Fprintf(&b, "%s → %s · score %d\n", r.Asset.Ticker, r.Recommendation, r.ScoreFinal)
+			fmt.Fprintf(&b, "%s → %s · Trading %d/100\n", r.Asset.Ticker, c.V4.RecommendationV4, c.V4.TradingScore)
 		}
 		b.WriteString("Acción: NO comprar por la señal anterior; esperar un nuevo setup confirmado.")
 		if configured {

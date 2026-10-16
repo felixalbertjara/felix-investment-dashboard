@@ -16,7 +16,7 @@ import (
 // velocidad del retorno, tiempo consumido y salida por invalidación / trailing / toma.
 
 const (
-	defaultSwingDays    = 45
+	defaultSwingDays    = 15
 	defaultPositionDays = 120
 )
 
@@ -896,10 +896,33 @@ func analyzePortfolioExitV2(p PortfolioPosition, r Result, pnlPct float64, days 
 		}
 	}
 
-	// Time stop: solo castiga de verdad si el horizonte se excedió Y el trade no está funcionando/está débil.
+	// Time stop V4: para trading corto, la operación debe demostrar relativamente rápido que la tesis funcionaba.
 	timeExpired := sessions > expectedDays
 	timeVeryExpired := sessions > expectedDays*2
 	weakTrend := (r.EMA20 > 0 && price < r.EMA20) || (r.MACDHist < 0)
+	tradeSlow := false
+	tradeVerySlow := false
+	if strings.EqualFold(strategy, "SWING") {
+		v4 := evaluateV4(r)
+		if sessions >= 5 && pnlPct < 0.5 && v4.TradingScore < 75 {
+			reasons = append(reasons, fmt.Sprintf("Trade lento: a las %d ruedas todavía no mostró progreso y Trading Score cayó a %d/100.", sessions, v4.TradingScore))
+		}
+		if sessions >= 8 && pnlPct < 1.0 && v4.TradingScore < 70 {
+			score += 2
+			tradeSlow = true
+			reasons = append(reasons, "Capital inmóvil: 8+ ruedas sin avance suficiente y momentum débil.")
+		}
+		if sessions >= 10 && pnlPct < 2.0 && v4.TradingScore < 72 {
+			score += 3
+			tradeVerySlow = true
+			reasons = append(reasons, "Rotación sugerida: 10+ ruedas sin alcanzar un movimiento razonable.")
+		}
+		if sessions >= expectedDays && pnlPct < 3.0 && v4.TradingScore < 78 {
+			score += 4
+			tradeVerySlow = true
+			reasons = append(reasons, fmt.Sprintf("Fin de tesis corta: %d/%d ruedas con retorno pobre y sin aceleración.", sessions, expectedDays))
+		}
+	}
 	if timeVeryExpired && pnlPct < 8 && weakTrend {
 		score += 3
 		reasons = append(reasons, fmt.Sprintf("Time stop: %d ruedas, más del doble del horizonte %s (%d ruedas), con retorno pobre/debilidad.", sessions, strategy, expectedDays))
@@ -936,6 +959,12 @@ func analyzePortfolioExitV2(p PortfolioPosition, r Result, pnlPct float64, days 
 	if pnlPct < 0 && score >= 6 {
 		out.Signal, out.Class, out.SuggestedSellPct = "PROTEGER CAPITAL", "strongsell", 70
 		out.Action = "La operación está perdiendo y la estructura/tiempo empeoró. Revisar salida 50% a 100%; el stop inicial sigue siendo la línea roja."
+	} else if tradeVerySlow && score >= 4 {
+		out.Signal, out.Class, out.SuggestedSellPct = "ROTAR CAPITAL / TRADE LENTO", "sell", 70
+		out.Action = "La operación corta no hizo lo que debía en el tiempo esperado. Considerar liberar 50% a 100% y reasignar capital."
+	} else if tradeSlow && score >= 2 {
+		out.Signal, out.Class, out.SuggestedSellPct = "TRADE LENTO - REVISAR", "sell", 35
+		out.Action = "El trade está consumiendo tiempo sin progreso. Revisar si conviene reducir 25% a 50% si la próxima lectura no mejora."
 	} else if timeVeryExpired && pnlPct < 8 && weakTrend && score >= 4 {
 		out.Signal, out.Class, out.SuggestedSellPct = "ROTAR CAPITAL / TIME STOP", "sell", 50
 		out.Action = "El swing consumió demasiado tiempo sin compensar. Considerar liberar 50% a 100% para una oportunidad mejor."

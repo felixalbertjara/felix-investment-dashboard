@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -58,13 +59,13 @@ type portfolioSnapshot struct {
 }
 
 type marketSnapshot struct {
-	GeneratedAt  string   `json:"generated_at"`
-	Results      []Result `json:"results"`
-	Summary      string   `json:"summary"`
-	TotalAssets  int      `json:"total_assets"`
-	TotalActions int      `json:"total_actions"`
-	TotalCedears int      `json:"total_cedears"`
-	Errors       []string `json:"errors,omitempty"`
+	GeneratedAt  string     `json:"generated_at"`
+	Results      []V4Result `json:"results"`
+	Summary      string     `json:"summary"`
+	TotalAssets  int        `json:"total_assets"`
+	TotalActions int        `json:"total_actions"`
+	TotalCedears int        `json:"total_cedears"`
+	Errors       []string   `json:"errors,omitempty"`
 }
 
 func runServerlessScan() error {
@@ -142,12 +143,27 @@ func makePortfolioSnapshot(views []PortfolioView) portfolioSnapshot {
 }
 
 func makeMarketSnapshot(d Dashboard) marketSnapshot {
-	results := append([]Result(nil), d.Results...)
-	for i := range results {
+	results := make([]V4Result, 0, len(d.Results))
+	for _, base := range d.Results {
+		v4 := V4Analysis{}
+		if strings.Contains(strings.ToLower(base.AnalysisMode), "profundo") {
+			v4 = evaluateV4(base)
+		}
 		// Los indicadores ya están calculados; las velas crudas no se muestran en la web.
 		// Quitarlas suele achicar el snapshot de varios MB a unos pocos cientos de KB.
-		results[i].Quote.Candles = nil
+		base.Quote.Candles = nil
+		results = append(results, V4Result{Result: base, V4Analysis: v4})
 	}
+	// Las oportunidades V4 más interesantes quedan arriba del radar.
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].StrongBuy != results[j].StrongBuy {
+			return results[i].StrongBuy
+		}
+		if results[i].TradingScore != results[j].TradingScore {
+			return results[i].TradingScore > results[j].TradingScore
+		}
+		return results[i].ScoreFinal > results[j].ScoreFinal
+	})
 	return marketSnapshot{
 		GeneratedAt:  d.GeneratedAt,
 		Results:      results,
