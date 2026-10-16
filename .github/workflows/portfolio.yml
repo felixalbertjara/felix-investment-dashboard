@@ -1,9 +1,9 @@
 name: Portfolio scan
-run-name: Portfolio scan ${{ inputs.slot || inputs.reason || 'manual' }}
+run-name: Portfolio scan ${{ inputs.slot || inputs.reason || github.event_name }}
 
 "on":
   schedule:
-    - cron: "*/5 14-19 * * 1-5"
+    - cron: "*/10 14-19 * * 1-5"
     - cron: "0 20 * * 1-5"
   workflow_dispatch:
     inputs:
@@ -32,8 +32,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Decidir si corresponde cartera
+        id: gate
+        env:
+          DASHBOARD_API_URL: ${{ secrets.DASHBOARD_API_URL }}
+          SCANNER_SECRET: ${{ secrets.SCANNER_SECRET }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "reason=dispatch" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          RESPONSE=$(curl -fsS \
+            -H "Authorization: Bearer $SCANNER_SECRET" \
+            "$DASHBOARD_API_URL/internal/portfolio-due")
+          echo "$RESPONSE"
+          RUN=$(python3 -c 'import json,sys; print("true" if json.load(sys.stdin).get("run") else "false")' <<< "$RESPONSE")
+          REASON=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("reason", ""))' <<< "$RESPONSE")
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+
       - name: Scan cartera
+        if: steps.gate.outputs.run == 'true'
         working-directory: scanner
         env:
           SCAN_MODE: portfolio
@@ -45,3 +69,7 @@ jobs:
         run: |
           chmod +x ./felix_dashboard_scanner
           ./felix_dashboard_scanner serverless-scan
+
+      - name: Sin scan en este ciclo
+        if: steps.gate.outputs.run != 'true'
+        run: echo "Cartera no requerida en este ciclo (${{ steps.gate.outputs.reason }})."
