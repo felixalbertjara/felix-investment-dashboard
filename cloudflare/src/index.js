@@ -25,9 +25,6 @@ export default {
     return env.ASSETS.fetch(request);
   },
 
-  async scheduled(controller, env, ctx) {
-    ctx.waitUntil(handleCron(controller, env));
-  },
 };
 
 function json(data, status = 200) {
@@ -73,6 +70,34 @@ async function handleInternal(request, env, url) {
     const when = raw ? new Date(raw) : new Date();
     if (Number.isNaN(when.getTime())) return json({ error: 'at inválido' }, 400);
     return json(await marketStatus(env.DB, when));
+  }
+
+  if (request.method === 'GET' && url.pathname === '/internal/radar-due') {
+    const raw = url.searchParams.get('at');
+    const when = raw ? new Date(raw) : new Date();
+    if (Number.isNaN(when.getTime())) return json({ error: 'at inválido' }, 400);
+    const status = await marketStatus(env.DB, when);
+    if (!status.open) return json({ run: false, reason: status.reason, market_status: status });
+
+    const [lastSnapshotAt, manualRequestedAt] = await Promise.all([
+      getMeta(env.DB, 'market_snapshot_updated_at'),
+      getMeta(env.DB, 'manual_radar_requested_at'),
+    ]);
+    const nowMs = when.getTime();
+    const lastMs = Date.parse(lastSnapshotAt || '');
+    const reqMs = Date.parse(manualRequestedAt || '');
+    const manualDue = Number.isFinite(reqMs) && (!Number.isFinite(lastMs) || reqMs > lastMs);
+    // El workflow despierta cada 5 min. Ejecutamos radar normal aproximadamente cada 15 min.
+    // Umbral de 12 min tolera retrasos normales de GitHub Actions.
+    const autoDue = !Number.isFinite(lastMs) || (nowMs - lastMs) >= 12 * 60 * 1000;
+    const run = manualDue || autoDue;
+    return json({
+      run,
+      reason: manualDue ? 'manual-request' : autoDue ? 'interval-15m' : 'not-due',
+      last_snapshot_at: lastSnapshotAt || '',
+      manual_requested_at: manualRequestedAt || '',
+      market_status: status,
+    });
   }
 
 
@@ -187,8 +212,7 @@ async function handleApi(request, env, url, ctx) {
     try { body = await request.json(); } catch { return json({ error: 'json inválido' }, 400); }
     const result = await savePortfolio(env, body);
     if (result.error) return json(result, 400);
-    const status = await marketStatus(env.DB, new Date());
-    if (status.open) ctx.waitUntil(dispatchWorkflow(env, 'portfolio.yml', { reason: 'portfolio-save', scheduled_at: new Date().toISOString() }).catch(()=>{}));
+    await setMeta(env.DB, 'portfolio_scan_requested_at', new Date().toISOString());
     return json({ ok: true, portfolio: result.portfolio, plan_pending: true });
   }
 
@@ -232,18 +256,17 @@ async function handleApi(request, env, url, ctx) {
     }
 
     const previousSnapshotAt = await getMeta(env.DB, 'market_snapshot_updated_at');
-    await dispatchWorkflow(env, 'radar.yml', {
-      reason: 'dashboard-refresh-radar',
-      slot: `${status.date} ${status.time}`,
-      scheduled_at: now.toISOString(),
-    });
+    await setMeta(env.DB, 'manual_radar_requested_at', now.toISOString());
     await setMeta(env.DB, 'last_manual_radar_dispatch_at', now.toISOString());
-    return json({ ok: true, previous_snapshot_at: previousSnapshotAt || '', message: 'Radar nuevo solicitado. GitHub Actions está recalculando todo.' });
+    return json({
+      ok: true,
+      previous_snapshot_at: previousSnapshotAt || '',
+      message: 'Radar solicitado. GitHub lo toma en el próximo ciclo de control (normalmente dentro de 5 min).',
+    });
   }
 
   if (request.method === 'POST' && url.pathname === '/api/test-alert') {
-    ctx.waitUntil(dispatchWorkflow(env, 'test-alert.yml', { reason: 'dashboard-button' }));
-    return json({ ok: true, message: 'Prueba enviada a GitHub Actions' });
+    return json({ ok: true, message: 'La prueba directa desde Cloudflare quedó desactivada para no depender de GITHUB_TOKEN. Para probar Telegram, ejecutá Test Telegram manualmente desde GitHub Actions.' });
   }
 
   if (request.method === 'POST' && url.pathname === '/api/refresh') {
@@ -313,19 +336,6 @@ async function savePortfolio(env, body) {
   return { portfolio: store };
 }
 
-async function handleCron(controller, env) {
-  const when = controller?.scheduledTime ? new Date(controller.scheduledTime) : new Date();
-  const status = await marketStatus(env.DB, when);
-  if (!status.open) return;
-  const local = artParts(when);
-  const minute = Number(local.minute);
-  await dispatchWorkflow(env, 'portfolio.yml', { reason: 'cron', slot: `${local.date} ${local.hour}:${local.minute}`, scheduled_at: when.toISOString() });
-  if (minute % 15 === 0) {
-    await dispatchWorkflow(env, 'radar.yml', { reason: 'cron', slot: `${local.date} ${local.hour}:${local.minute}`, scheduled_at: when.toISOString() });
-  }
-  await setMeta(env.DB, 'last_dispatch_at', when.toISOString());
-}
-
 async function marketStatus(_db, when) {
   const p = artParts(when);
   const h = Number(p.hour), m = Number(p.minute), weekday = Number(p.weekdayNum);
@@ -346,23 +356,6 @@ function artParts(date) {
 }
 function artDate(d) { return artParts(d).date; }
 function artDateDisplay(d) { const p=artParts(d); return `${p.date.slice(8,10)}/${p.date.slice(5,7)}/${p.date.slice(0,4)}`; }
-
-async function dispatchWorkflow(env, workflow, inputs = {}) {
-  if (!env.GITHUB_TOKEN || !env.GITHUB_OWNER || !env.GITHUB_REPO) throw new Error('GitHub dispatch no configurado');
-  const endpoint = `https://api.github.com/repos/${env.GITHUB_OWNER}/${env.GITHUB_REPO}/actions/workflows/${workflow}/dispatches`;
-  const r = await fetch(endpoint, {
-    method:'POST',
-    headers:{
-      'authorization':`Bearer ${env.GITHUB_TOKEN}`,
-      'accept':'application/vnd.github+json',
-      'x-github-api-version':'2022-11-28',
-      'user-agent':'FelixDashboardV3-Cloudflare',
-      'content-type':'application/json',
-    },
-    body:JSON.stringify({ ref: env.GITHUB_BRANCH || 'main', inputs })
-  });
-  if (!r.ok) throw new Error(`GitHub dispatch ${workflow}: ${r.status} ${await r.text()}`);
-}
 
 async function getBlobWithVersion(db, key) {
   const row = await db.prepare('SELECT payload,updated_at FROM state_blobs WHERE key=?').bind(key).first();
