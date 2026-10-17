@@ -1,0 +1,24 @@
+name: Fixed Income math tests
+
+"on":
+  workflow_dispatch:
+  push:
+    paths:
+      - 'cloudflare/public/fixed-income-core.mjs'
+      - 'cloudflare/tests/fixed-income.test.mjs'
+      - '.github/workflows/fixed-income-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run fixed-income math tests
+        run: node --test cloudflare/tests/fixed-income.test.mjs
