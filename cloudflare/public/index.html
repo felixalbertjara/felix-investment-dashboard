@@ -13,7 +13,7 @@
 <body>
 <div class="header"><div class="headerTop"><div><h1>RADAR</h1><div class="sub" id="generated">Cargando último snapshot...</div></div><div id="marketPill" class="statusPill closed">Consultando estado...</div></div></div>
 <div class="wrap">
-  <div class="nav"><a href="#portfolio">Cartera</a><a href="#alerts">Alertas</a><a href="#market">Radar</a><button onclick="loadDashboard(true)">Actualizar vista</button><button id="radarRefreshBtn" onclick="refreshRadar()">🔄 Refrescar Radar</button><button onclick="testAlert()">Probar Telegram</button><button onclick="diagnoseSystem()">🔧 Diagnóstico</button><button id="modeBtn" onclick="toggleMode()">Modo simple</button></div>
+  <div class="nav"><a href="#portfolio">Cartera</a><a href="#fixedIncome">Bonos &amp; ONs</a><a href="#alerts">Alertas</a><a href="#market">Radar</a><button onclick="loadDashboard(true)">Actualizar vista</button><button id="radarRefreshBtn" onclick="refreshRadar()">🔄 Refrescar Radar</button><button onclick="testAlert()">Probar Telegram</button><button onclick="diagnoseSystem()">🔧 Diagnóstico</button><button id="modeBtn" onclick="toggleMode()">Modo simple</button></div>
   <div class="helpBox"><b>Motor FARO V5:</b> prioriza <b>tendencia + momentum + breakout + fuerza relativa + riesgo/beneficio</b>. Noticias, VIX y macro son contexto, no órdenes automáticas. Una <b>OPORTUNIDAD JUGOSA</b> exige además validación histórica fuera de muestra. En cartera, FARO busca dejar correr las tendencias y avisar cuando la estructura realmente se deteriora.</div>
   <div class="helpBox" id="systemHealth"><b>Automatización:</b> comprobando estado…</div>
 
@@ -35,6 +35,102 @@
   </form>
   <div class="mobileHint">En pantallas chicas podés deslizar la tabla de costado.</div>
   <div class="tableBox"><table><thead><tr><th>Activo</th><th>Desde / plan</th><th>Invertido</th><th>Precio compra</th><th>Precio actual</th><th>Valor actual</th><th>Rendimiento / R</th><th>Señal cartera</th><th>Protección FARO</th><th>Razones</th><th>Acción</th></tr></thead><tbody id="portfolioRows"><tr><td colspan="11" class="empty">Cargando...</td></tr></tbody></table></div>
+
+
+  <h2 id="fixedIncome" class="sectionTitle">Bonos &amp; ONs · análisis de renta fija</h2>
+  <div class="helpBox"><b>Calculadora auditable:</b> cargá las puntas que ves en Balanz y el calendario real de pagos. RADAR calcula TIR con fechas, costos, spread, escenarios de venta, sensibilidad a tasas y precio máximo para tu rendimiento objetivo. <b>No inventa flujos ni precios.</b> Si falta un dato crítico, devuelve “Información insuficiente”. Las alertas de esta sección quedan como <b>manuales/no verificadas en tiempo real</b> mientras no exista una fuente legítima de cotizaciones conectada.</div>
+  <form id="fiForm" class="fi-panel">
+    <input type="hidden" id="fiHistoricalExample" name="historicalExample" value="0">
+    <h3 style="margin-top:0">Datos básicos</h3>
+    <div class="fi-grid">
+      <label>Ticker<input name="ticker" placeholder="AL30, AE38, LQC1D" required></label>
+      <label>Emisor<input name="issuer" placeholder="República Argentina / empresa"></label>
+      <label>Tipo<select name="type"><option>Bono soberano</option><option>ON corporativa</option><option>Bono provincial</option><option>Otro</option></select></label>
+      <label>Especie<select name="species"><option>Pesos</option><option>Dólar MEP</option><option>Dólar cable</option><option>Otra</option></select></label>
+
+      <label>Moneda de pago<select name="paymentCurrency"><option>USD</option><option>ARS</option><option>EUR</option><option>Otra</option></select></label>
+      <label>Moneda de cotización<select name="quoteCurrency"><option>USD</option><option>ARS</option><option>EUR</option><option>Otra</option></select></label>
+      <label>Punta vendedora / compra<input name="askPrice" inputmode="decimal" placeholder="Precio que pagarías" required></label>
+      <label>Punta compradora / venta<input name="bidPrice" inputmode="decimal" placeholder="Precio al que podrías vender"></label>
+
+      <label>Fecha y hora de cotización<input type="datetime-local" name="quoteTimestamp" required></label>
+      <label>Fecha de liquidación<input type="date" name="settlementDate"></label>
+      <label>Monto a invertir<input name="investmentAmount" inputmode="decimal" placeholder="En moneda de cotización"></label>
+      <label>Vencimiento<input type="date" name="maturityDate"></label>
+
+      <label>Cupón anual %<input name="couponAnnualPct" inputmode="decimal" placeholder="8,50"></label>
+      <label>Frecuencia pagos/año<input name="frequency" type="number" min="1" max="12" value="2"></label>
+      <label>Amortización<input name="amortizationType" placeholder="Al vencimiento / parcial / variable"></label>
+      <label>Capital residual %<input name="residualPct" inputmode="decimal" placeholder="100"></label>
+
+      <label>Escala de cotización<select name="quoteScale"><option value="100">Precio por VN 100 / % par</option><option value="1">Precio por VN 1</option><option value="1000">Precio por VN 1000</option></select></label>
+      <label>Base del calendario<select name="flowBase"><option value="100">Flujos por VN 100</option><option value="1000">Flujos por VN 1000</option><option value="1">Flujos por VN 1</option></select></label>
+      <label>Precio<select name="priceType"><option value="dirty">Sucio / incluye corridos</option><option value="clean">Limpio / sumar corridos</option></select></label>
+      <label>Intereses corridos<input name="accruedInterest" inputmode="decimal" placeholder="Misma escala del precio"></label>
+
+      <label class="wide">FX actual si monedas difieren<input name="fxRateQuotePerPayment" inputmode="decimal" placeholder="Ej: ARS por 1 USD para convertir compra"></label>
+      <label class="wide">Próximo pago<input type="date" name="nextPaymentDate"></label>
+    </div>
+
+    <details class="fi-details">
+      <summary>Datos avanzados y criterios</summary>
+      <div class="fi-grid" style="margin-top:12px">
+        <label>TIR Balanz %<input name="balanzYtmPct" inputmode="decimal"></label>
+        <label>TNA %<input name="tnaPct" inputmode="decimal"></label>
+        <label>Paridad %<input name="parityPct" inputmode="decimal"></label>
+        <label>Valor técnico<input name="technicalValue" inputmode="decimal"></label>
+        <label>Duration<input name="duration" inputmode="decimal"></label>
+        <label>Modified duration<input name="modifiedDuration" inputmode="decimal"></label>
+        <label>Convención<select name="dayCount"><option>ACT/365</option><option>ACT/360</option><option>30/360</option></select></label>
+        <label>Pagos pendientes<input name="pendingPayments" type="number" min="0"></label>
+        <label>Volumen<input name="volume" inputmode="decimal"></label>
+        <label>Mínimo 52 semanas<input name="low52" inputmode="decimal"></label>
+        <label>Máximo 52 semanas<input name="high52" inputmode="decimal"></label>
+        <label>Rating<input name="rating" placeholder="Ej: AA(arg), B, etc."></label>
+        <label>Riesgo crediticio<select name="creditRisk"><option value="desconocido">Desconocido</option><option value="bajo">Bajo</option><option value="medio">Medio</option><option value="alto">Alto</option></select></label>
+        <label>Deuda neta / EBITDA<input name="netDebtEbitda" inputmode="decimal" placeholder="Opcional ON"></label>
+        <label>Cobertura intereses x<input name="interestCoverage" inputmode="decimal" placeholder="Opcional ON"></label>
+        <label>Comisión compra %<input name="buyFeePct" inputmode="decimal" value="0"></label>
+        <label>Comisión venta %<input name="sellFeePct" inputmode="decimal" value="0"></label>
+
+        <label>Rendimiento mínimo deseado %<input name="targetYieldPct" inputmode="decimal" value="9"></label>
+        <label>Spread máximo aceptable %<input name="maxSpreadPct" inputmode="decimal" value="2"></label>
+        <label>Duration máxima<input name="maxDurationYears" inputmode="decimal" value="6"></label>
+        <label>Horizonte / nota<input name="holdingHorizon" placeholder="Ej: hasta vencimiento / 12 meses"></label>
+
+        <label>Precio objetivo venta efectivo/sucio<input name="targetSellPrice" inputmode="decimal"></label>
+        <label>Fecha estimada de venta<input type="date" name="saleDate"></label>
+        <label class="wide">FX estimado de salida si monedas difieren<input name="exitFxRateQuotePerPayment" inputmode="decimal" placeholder="Necesario para anualizar venta en otra moneda"></label>
+
+        <label>Alerta: precio ≤<input name="alertPriceMax" inputmode="decimal"></label>
+        <label>Alerta: TIR neta ≥ %<input name="alertYieldMinPct" inputmode="decimal"></label>
+        <label>Alerta: spread ≤ %<input name="alertSpreadMaxPct" inputmode="decimal"></label>
+        <label>Notas<input name="notes" placeholder="Prospecto, garantía, covenants..."></label>
+      </div>
+    </details>
+
+    <div class="fi-flowbox" style="margin-top:14px">
+      <label>Calendario real de pagos · fecha ; interés ; amortización<textarea id="fiCashFlowText" class="fi-flowtext" name="cashFlowText" placeholder="2027-01-09;0.24;8\n2027-07-09;0.21;8"></textarea></label>
+      <div class="fi-small">Los importes del calendario deben estar expresados por la <b>base de flujo</b> elegida arriba. Podés pegar desde Excel/Sheets usando punto y coma, coma o tabulaciones.</div>
+      <div class="fi-actions"><label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer"><input id="fiCsvFile" type="file" accept=".csv,text/csv,text/plain" style="display:none"><span class="fi-pill">Importar CSV</span></label></div>
+    </div>
+
+    <div class="fi-actions">
+      <button type="button" id="fiAnalyzeBtn">🧮 Analizar ahora</button>
+      <button type="button" id="fiSaveBtn">💾 Guardar en comparador</button>
+      <button type="button" id="fiResetBtn">Nuevo análisis</button>
+      <button type="button" id="fiPresetAL30">Ejemplo AL30 16/10/2026</button>
+      <button type="button" id="fiPresetLQC1D">Ejemplo LQC1D 16/10/2026</button>
+    </div>
+  </form>
+
+  <div id="fiAnalysis"><div class="fi-panel fi-muted">Completá los datos y RADAR analizará la inversión sin inventar los datos faltantes.</div></div>
+
+  <div class="fi-panel">
+    <div class="fi-toolbar"><h3 style="margin:0;margin-right:auto">Comparador guardado</h3><select id="fiCompareCurrency"><option value="">Todas las monedas (agrupación visual)</option><option>USD</option><option>ARS</option><option>EUR</option></select><select id="fiCompareSort"><option value="yield">Ordenar por TIR neta</option><option value="spread">Ordenar por spread</option><option value="duration">Ordenar por duration</option><option value="decision">Ordenar por evaluación</option></select></div>
+    <div class="fi-small" style="margin:8px 0">No uses una TIR en ARS para “ganarle” directamente a una TIR en USD. RADAR conserva la moneda de pago y no mezcla la comparación económica entre monedas.</div>
+    <div class="tableBox" style="margin-bottom:0"><table class="fi-table"><thead><tr><th>Ticker</th><th>Moneda pago</th><th>Vencimiento</th><th>Precio compra</th><th>TIR bruta</th><th>TIR neta</th><th>Duration</th><th>Spread</th><th>Evaluación</th><th>Acción</th></tr></thead><tbody id="fiSavedRows"><tr><td colspan="10" class="empty">Cargando instrumentos guardados...</td></tr></tbody></table></div>
+  </div>
 
   <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h2 id="alerts" class="sectionTitle">Últimas alertas detectadas</h2><button class="danger" onclick="clearAlerts()">🗑 Borrar alertas pasadas</button></div>
   <div class="tableBox"><table><thead><tr><th>Fecha</th><th>Activo</th><th>Antes</th><th>Nueva señal</th><th>Cambio</th><th>Precio</th><th>PnL</th><th>Score</th><th>Acción</th><th>Motivo</th></tr></thead><tbody id="alertRows"><tr><td colspan="10" class="empty">Cargando...</td></tr></tbody></table></div>
@@ -86,5 +182,6 @@ async function testAlert(){try{await api('/api/test-alert',{method:'POST',body:'
 $('#importFile').addEventListener('change',async e=>{const f=e.target.files?.[0];if(!f)return;try{const data=JSON.parse(await f.text());await api('/api/portfolio/import',{method:'POST',body:JSON.stringify(data)});toast('portfolio.json importado');loadDashboard()}catch(err){toast('Importación falló: '+err.message)}e.target.value=''})
 setMode(localStorage.getItem('dashboardMode')||'simple');loadDashboard();setInterval(()=>{if(MODEL?.market_status?.open)loadDashboard()},180000);
 </script>
+<script type="module" src="/fixed-income.js"></script>
 </body>
 </html>
