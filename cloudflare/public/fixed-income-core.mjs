@@ -111,10 +111,13 @@ export function parseCashFlowText(text) {
 
 export function spreadMetrics(ask, bid) {
   ask = num(ask, NaN); bid = num(bid, NaN);
-  if (!(ask > 0) || !(bid > 0) || bid > ask * 1.5) return { abs: null, pctAsk: null, pctMid: null };
+  if (!(ask > 0) || !(bid > 0)) return { abs: null, pctAsk: null, pctMid: null, inverted: false };
+  // En un libro normal la punta compradora (bid) debe ser menor o igual a la vendedora (ask).
+  // Si ocurre al revés, lo más probable es que las puntas se hayan cargado invertidas o sean de momentos distintos.
+  if (bid > ask) return { abs: null, pctAsk: null, pctMid: null, inverted: true };
   const abs = ask - bid;
   const mid = (ask + bid) / 2;
-  return { abs, pctAsk: abs / ask * 100, pctMid: mid > 0 ? abs / mid * 100 : null };
+  return { abs, pctAsk: abs / ask * 100, pctMid: mid > 0 ? abs / mid * 100 : null, inverted: false };
 }
 
 function quoteScaleValue(v) {
@@ -227,8 +230,11 @@ export function analyzeFixedIncome(raw) {
   else if (ageHours > 24) warnings.push(`Cotización con ${ageHours.toFixed(0)} h de antigüedad.`);
 
   const spread = spreadMetrics(input.askPrice, input.bidPrice);
+  if (spread.inverted) limitations.push('Las puntas de compra/venta parecen invertidas o pertenecen a momentos distintos.');
   const maxSpread = Math.max(0.05, num(input.maxSpreadPct, 2));
-  if (spread.pctAsk != null) {
+  if (spread.inverted) {
+    warnings.push('Las puntas parecen invertidas: el precio de VENDER (punta compradora) quedó por encima del precio de COMPRAR (punta vendedora). Revisá los dos valores antes de decidir.');
+  } else if (spread.pctAsk != null) {
     if (spread.pctAsk > maxSpread * 2) warnings.push(`Spread muy alto (${spread.pctAsk.toFixed(2)}%): entrar y salir puede ser costoso.`);
     else if (spread.pctAsk > maxSpread) warnings.push(`Spread por encima de tu máximo (${spread.pctAsk.toFixed(2)}% > ${maxSpread.toFixed(2)}%).`);
     else reasons.push(`Spread dentro de tu límite (${spread.pctAsk.toFixed(2)}%).`);

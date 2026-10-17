@@ -13,6 +13,33 @@ function fmtMoney(v,c='USD'){if(!Number.isFinite(Number(v)))return'-';try{return
 function toastFi(msg){const t=document.querySelector('#toast');if(!t)return alert(msg);t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',4200);}
 async function apiFi(path,opts={}){const r=await fetch(path,{...opts,headers:{'content-type':'application/json',...(opts.headers||{})}});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||`HTTP ${r.status}`);return j;}
 
+function localDateTimeValue(d=new Date()){
+  const pad=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function syncSimpleFields(){
+  const f=$fi('#fiForm');if(!f)return;
+  const species=f.elements.namedItem('species')?.value||'';
+  const pc=(f.elements.namedItem('paymentCurrency')?.value||'').toUpperCase();
+  const qcEl=f.elements.namedItem('quoteCurrency');
+  const qts=f.elements.namedItem('quoteTimestamp');
+  const setl=f.elements.namedItem('settlementDate');
+  let qc=(qcEl?.value||'').toUpperCase();
+  if(species==='Pesos') qc='ARS';
+  else if(species==='Dólar MEP'||species==='Dólar cable') qc='USD';
+  if(qcEl && qc) qcEl.value=qc;
+  if(qts && !qts.value) qts.value=localDateTimeValue();
+  if(setl && !setl.value && qts?.value) setl.value=qts.value.slice(0,10);
+  const fxWrap=$fi('#fiFxWrap');
+  if(fxWrap) fxWrap.classList.toggle('fi-hidden', !pc || !qc || pc===qc);
+  const st=$fi('#fiSimpleStatus');
+  if(st){
+    const settle=setl?.value||'auto';
+    st.innerHTML=`Cotiza en <b>${esc(qc||'-')}</b> · paga en <b>${esc(pc||'-')}</b> · liquidación asumida <b>${esc(settle)}</b>. Si algo especial no coincide, corregilo en “Detalles técnicos”.`;
+  }
+}
+
 function injectStyles(){
   if(document.querySelector('#fiStyles'))return;
   const st=document.createElement('style');st.id='fiStyles';st.textContent=`
@@ -21,6 +48,7 @@ function injectStyles(){
 }
 
 function formToInput(){
+  syncSimpleFields();
   const f=$fi('#fiForm');const fd=new FormData(f);const o=Object.fromEntries(fd.entries());
   ['askPrice','bidPrice','investmentAmount','couponAnnualPct','frequency','residualPct','quoteScale','flowBase','accruedInterest','fxRateQuotePerPayment','exitFxRateQuotePerPayment','balanzYtmPct','tnaPct','parityPct','technicalValue','duration','modifiedDuration','pendingPayments','volume','low52','high52','buyFeePct','sellFeePct','targetSellPrice','targetYieldPct','maxSpreadPct','maxDurationYears','netDebtEbitda','interestCoverage','alertPriceMax','alertYieldMinPct','alertSpreadMaxPct'].forEach(k=>o[k]=o[k]===''?'':num(o[k],0));
   const parsed=parseCashFlowText(o.cashFlowText||'');o.flows=parsed.rows;o.cashFlowErrors=parsed.errors;delete o.cashFlowText;
@@ -37,6 +65,7 @@ function setForm(data){
   }
   $fi('#fiCashFlowText').value=cashFlowsToText(data?.flows||[]);
   $fi('#fiHistoricalExample').value=data?.historicalExample?'1':'0';
+  syncSimpleFields();
   runAnalysis();
 }
 
@@ -101,12 +130,15 @@ function renderSaved(){
 }
 
 function preset(kind){setForm(kind==='al30'?al30Example():lqc1dExample());toastFi('Ejemplo histórico cargado. No se usa como recomendación actual.');}
-function resetForm(){const f=$fi('#fiForm');f.reset();$fi('#fiHistoricalExample').value='0';$fi('#fiCashFlowText').value='';lastInput=null;lastAnalysis=null;$fi('#fiAnalysis').innerHTML='<div class="fi-panel fi-muted">Completá los datos y RADAR analizará la inversión sin inventar los datos faltantes.</div>';}
+function resetForm(){const f=$fi('#fiForm');f.reset();$fi('#fiHistoricalExample').value='0';$fi('#fiCashFlowText').value='';const q=f.elements.namedItem('quoteTimestamp');if(q)q.value=localDateTimeValue();syncSimpleFields();lastInput=null;lastAnalysis=null;$fi('#fiAnalysis').innerHTML='<div class="fi-panel fi-muted">Completá lo esencial. Para una TIR propia exacta, abrí “Cálculo exacto” y pegá los pagos reales.</div>';}
 
 function bind(){
   const f=$fi('#fiForm');if(!f)return;
+  const q=f.elements.namedItem('quoteTimestamp');if(q&&!q.value)q.value=localDateTimeValue();
+  syncSimpleFields();
   f.addEventListener('submit',e=>{e.preventDefault();runAnalysis()});
-  f.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(runAnalysis,350)});
+  f.addEventListener('change',e=>{if(['species','paymentCurrency','quoteCurrency','quoteTimestamp'].includes(e.target?.name))syncSimpleFields()});
+  f.addEventListener('input',()=>{syncSimpleFields();clearTimeout(timer);timer=setTimeout(runAnalysis,350)});
   $fi('#fiAnalyzeBtn')?.addEventListener('click',runAnalysis);
   $fi('#fiSaveBtn')?.addEventListener('click',saveCurrent);
   $fi('#fiResetBtn')?.addEventListener('click',resetForm);
