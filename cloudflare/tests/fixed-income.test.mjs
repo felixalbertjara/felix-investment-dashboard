@@ -82,3 +82,17 @@ test('precio máximo neto baja cuando hay comisión de compra', () => {
   assert.ok(net < gross);
   assert.ok(Math.abs(net - gross/1.01) < 1e-8);
 });
+
+test('detecta puntas invertidas y no calcula spread engañoso', () => {
+  const s = spreadMetrics(844.5, 860);
+  assert.equal(s.inverted, true);
+  assert.equal(s.pctAsk, null);
+  const a = analyzeFixedIncome({
+    ticker:'TEST', paymentCurrency:'USD', quoteCurrency:'USD', quoteScale:100, flowBase:100,
+    askPrice:844.5, bidPrice:860, quoteTimestamp:new Date().toISOString(), settlementDate:new Date().toISOString().slice(0,10),
+    targetYieldPct:9, maxSpreadPct:2, creditRisk:'bajo', duration:3,
+    flows:[{date:'2030-01-01',interest:10,amortization:100}]
+  });
+  assert.equal(a.decisionKind, 'insufficient');
+  assert.ok(a.limitations.some(x=>x.includes('puntas')));
+});
