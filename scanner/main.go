@@ -2691,7 +2691,7 @@ func alertRank(a string) int {
 		return 2
 	case "TOMAR GANANCIA FUERTE":
 		return 3
-	case "SALIR / VENDER MUCHO":
+	case "SALIR / VENDER MUCHO", "SALIR / FIN DE TENDENCIA":
 		return 4
 	case "PROTEGER CAPITAL":
 		return 5

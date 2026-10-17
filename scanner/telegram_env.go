@@ -42,7 +42,7 @@ func sendTelegramMessage(message string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "FelixInvestmentDashboardServerless/3.0")
+	req.Header.Set("User-Agent", "RADARServerless/5.0")
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -63,13 +63,13 @@ func sendTelegramMessage(message string) error {
 }
 
 func sendTestNotification() error {
-	return sendTelegramMessage("✅ Felix Investment Dashboard V3 Serverless\n\nAlerta de prueba OK. GitHub + Telegram están funcionando.")
+	return sendTelegramMessage("✅ RADAR\n\nAlerta de prueba OK. GitHub + Telegram están funcionando.")
 }
 
 func notifyInvestmentAlert(p PortfolioView, why, popupMessage string) error {
 	icon := "🟡"
 	switch p.Alert {
-	case "STOP - TESIS INVALIDADA", "STOP DINÁMICO - ASEGURAR", "SALIR / VENDER MUCHO", "PROTEGER CAPITAL":
+	case "STOP - TESIS INVALIDADA", "STOP DINÁMICO - ASEGURAR", "SALIR / VENDER MUCHO", "SALIR / FIN DE TENDENCIA", "PROTEGER CAPITAL":
 		icon = "🚨"
 	case "TOMAR GANANCIA FUERTE":
 		icon = "🟠"
@@ -78,7 +78,7 @@ func notifyInvestmentAlert(p PortfolioView, why, popupMessage string) error {
 	case "PROTEGER GANANCIA":
 		icon = "🔔"
 	}
-	msg := fmt.Sprintf("%s FELIX TRADING ALERT\n\n%s · %s\nCambio: %s\nPrecio: %s\nRendimiento: %.2f%%\nR: %.2fR\nVelocidad: %s\nRuedas: %d/%d (%s)\nCalendario: %d días\nExit score: %d\nVenta sugerida: %.0f%%\nStop inicial: %s\nStop efectivo: %s\nMáximo desde compra: %s\n\nAcción: %s\n\nMotivo: %s",
+	msg := fmt.Sprintf("%s RADAR · ALERTA DE CARTERA\n\n%s · %s\nCambio: %s\nPrecio: %s\nRendimiento: %.2f%%\nR: %.2fR\nVelocidad: %s\nRuedas: %d/%d (%s)\nCalendario: %d días\nExit score: %d\nVenta sugerida: %.0f%%\nStop inicial: %s\nStop efectivo: %s\nMáximo desde compra: %s\n\nAcción: %s\n\nMotivo: %s",
 		icon, strings.ToUpper(p.Position.Ticker), p.Alert, why, money(p.Result.Quote.Price), p.PnLPct,
 		p.RMultiple, p.VelocityLabel, p.HoldingSessions, p.ExpectedDays, p.Strategy, p.HoldingDays,
 		p.ExitScore, p.SuggestedSellPct, money(p.InitialStopPrice), money(p.EffectiveStopPrice),

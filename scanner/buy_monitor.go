@@ -241,12 +241,14 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 			newBuys = newBuys[:5]
 		}
 		var b strings.Builder
-		b.WriteString("🚀 FELIX CLOUD · OPORTUNIDAD DE COMPRA CONFIRMADA\n\n")
+		b.WriteString("🔥 RADAR · OPORTUNIDAD JUGOSA CONFIRMADA\n\n")
 		for i, c := range newBuys {
 			r, v4 := c.Result, c.V4
 			fmt.Fprintf(&b, "%d) %s · %s\n", i+1, r.Asset.Ticker, v4.RecommendationV4)
 			fmt.Fprintf(&b, "Trading %d/100 · Largo %d/100 · %s\n", v4.TradingScore, v4.LongScore, v4.TradeSetup)
 			fmt.Fprintf(&b, "Precio: %s · R/R %.2f:1 · ADX %.1f\n", money(r.Quote.Price), v4.RewardRisk, v4.ADX)
+			fmt.Fprintf(&b, "Histórico: %s · %d trades · PF %.2f · Exp %.2fR\n", v4.HistoricalConfidence, v4.HistoricalTrades, v4.HistoricalProfitFactor, v4.HistoricalExpectancyR)
+			fmt.Fprintf(&b, "VIX: %.1f (%s) · Mercado: %s\n", v4.VIXLevel, v4.VIXRegime, v4.MarketRegime)
 			fmt.Fprintf(&b, "Ventana esperada: %s · Benchmark %s\n", v4.ExpectedWindow, v4.BenchmarkTicker)
 			fmt.Fprintf(&b, "Fuerza relativa: 20r %+0.1f%% · 60r %+0.1f%%\n", v4.RelativeStrength20, v4.RelativeStrength60)
 			if r.UnderlyingTicker != "" {
@@ -257,7 +259,7 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 			}
 			fmt.Fprintln(&b)
 		}
-		b.WriteString("Acción: revisar puntas/spread en Balanz antes de ejecutar. Es una señal excepcional, no una garantía de ganancia.")
+		b.WriteString("Acción: revisar puntas/spread en Balanz antes de ejecutar. FARO exige tendencia, momentum, breakout, fuerza relativa, R/R y validación histórica. No es una garantía de ganancia.")
 		if configured {
 			if err := sendTelegramMessage(b.String()); err != nil {
 				log.Println("Buy monitor Telegram:", err)
@@ -271,7 +273,7 @@ func runBuyMonitorCore(skipWindow bool, forceConfirm bool) {
 			cancelled = cancelled[:5]
 		}
 		var b strings.Builder
-		b.WriteString("⚪ FELIX CLOUD · SEÑAL DE COMPRA CANCELADA\n\n")
+		b.WriteString("⚪ RADAR · OPORTUNIDAD CANCELADA\n\n")
 		for _, c := range cancelled {
 			r := c.Result
 			fmt.Fprintf(&b, "%s → %s · Trading %d/100\n", r.Asset.Ticker, c.V4.RecommendationV4, c.V4.TradingScore)

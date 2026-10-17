@@ -896,6 +896,44 @@ func analyzePortfolioExitV2(p PortfolioPosition, r Result, pnlPct float64, days 
 		}
 	}
 
+	// FARO V5: la salida prioriza ruptura de tendencia, pérdida de fuerza relativa y
+	// deterioro del contexto. VIX y mercado contextualizan; nunca venden por sí solos.
+	faro := evaluateV4(r)
+	faroLow10 := v5PriorLow(r.Quote.Candles, 10)
+	faroLow20 := v5PriorLow(r.Quote.Candles, 20)
+	faroBreak10 := faroLow10 > 0 && price < faroLow10
+	faroBreak20 := faroLow20 > 0 && price < faroLow20
+	if faroBreak20 {
+		score += 4
+		reasons = append(reasons, fmt.Sprintf("FARO: rompió el mínimo de 20 ruedas (%s); tendencia claramente deteriorada.", money(faroLow20)))
+	} else if faroBreak10 {
+		score += 3
+		reasons = append(reasons, fmt.Sprintf("FARO: rompió el mínimo de 10 ruedas (%s), señal clásica de salida trend-following.", money(faroLow10)))
+	}
+	if faro.RelativeStrength20 < -5 {
+		score += 2
+		reasons = append(reasons, fmt.Sprintf("Fuerza relativa 20r débil vs %s: %.1f%%.", faro.BenchmarkTicker, faro.RelativeStrength20))
+	} else if faro.RelativeStrength20 < 0 {
+		score++
+		reasons = append(reasons, "Fuerza relativa de corto plazo dejó de acompañar.")
+	} else if pnlPct > 0 && faro.RelativeStrength20 > 3 {
+		score--
+		reasons = append(reasons, "Fuerza relativa sigue positiva; no apurar una salida ganadora.")
+	}
+	structureWeakFARO := (r.EMA20 > 0 && price < r.EMA20) || r.MACDHist < 0 || faroBreak10
+	if faro.MarketRegime == "DÉBIL" && structureWeakFARO {
+		score++
+		reasons = append(reasons, "Benchmark débil y estructura propia deteriorada.")
+	}
+	if faro.VIXLevel >= 30 && structureWeakFARO {
+		score++
+		reasons = append(reasons, fmt.Sprintf("VIX %.1f (%s): aumenta el riesgo mientras la estructura ya está débil.", faro.VIXLevel, faro.VIXRegime))
+	}
+	if rm >= 2 && pnlPct > 0 && !faroBreak10 && r.EMA20 > 0 && price > r.EMA20 && r.MACDHist > 0 && faro.RelativeStrength20 > 0 {
+		score--
+		reasons = append(reasons, "FARO: +2R o más con tendencia y momentum todavía sanos; conviene dejar correr antes que vender por ansiedad.")
+	}
+
 	// Time stop V4: para trading corto, la operación debe demostrar relativamente rápido que la tesis funcionaba.
 	timeExpired := sessions > expectedDays
 	timeVeryExpired := sessions > expectedDays*2
@@ -968,15 +1006,18 @@ func analyzePortfolioExitV2(p PortfolioPosition, r Result, pnlPct float64, days 
 	} else if timeVeryExpired && pnlPct < 8 && weakTrend && score >= 4 {
 		out.Signal, out.Class, out.SuggestedSellPct = "ROTAR CAPITAL / TIME STOP", "sell", 50
 		out.Action = "El swing consumió demasiado tiempo sin compensar. Considerar liberar 50% a 100% para una oportunidad mejor."
+	} else if faroBreak10 && pnlPct > 0 && score >= 5 {
+		out.Signal, out.Class, out.SuggestedSellPct = "SALIR / FIN DE TENDENCIA", "strongsell", 80
+		out.Action = "Mejor momento estimado de salida: la tendencia que justificaba mantener se quebró. Considerar vender 70% a 100% según spread/liquidez."
 	} else if score >= 9 && pnlPct > 0 {
 		out.Signal, out.Class, out.SuggestedSellPct = "SALIR / VENDER MUCHO", "strongsell", 90
-		out.Action = "Confluencia fuerte de toma de ganancia. Asegurar 70% a 100% y dejar resto solo si la estructura sigue válida."
+		out.Action = "Confluencia fuerte de salida: ganancia + agotamiento + deterioro técnico/contextual. Asegurar 70% a 100%."
 	} else if score >= 6 && pnlPct > 0 {
 		out.Signal, out.Class, out.SuggestedSellPct = "TOMAR GANANCIA FUERTE", "strongsell", 65
-		out.Action = "Vender aproximadamente 50% a 70%; proteger una operación buena sin matar todo el upside."
+		out.Action = "Momento favorable para realizar 50% a 70%: hay deterioro suficiente para asegurar ganancia sin depender de acertar el máximo exacto."
 	} else if score >= 4 && pnlPct > 0 {
 		out.Signal, out.Class, out.SuggestedSellPct = "TOMAR GANANCIA PARCIAL", "sell", 30
-		out.Action = "Vender aproximadamente 25% a 40% y dejar el resto con stop efectivo."
+		out.Action = "Tomar aproximadamente 25% a 40% y dejar el resto con stop efectivo mientras la tendencia no se quiebre."
 	} else if score >= 2 && pnlPct > 0 {
 		out.Signal, out.Class = "PROTEGER GANANCIA", "protect"
 		out.Action = "No vender todavía. Subir disciplina: respetar el stop efectivo y vigilar las próximas dos lecturas."

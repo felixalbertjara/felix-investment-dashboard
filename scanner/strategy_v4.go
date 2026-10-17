@@ -16,27 +16,37 @@ import (
 // La idea es que TRADING FUERTE sea deliberadamente raro: no alcanza con sumar puntos,
 // también deben pasar todos los filtros críticos (tendencia, fuerza, timing, R/R, contexto, etc.).
 type V4Analysis struct {
-	TradingScore       int      `json:"trading_score"`
-	LongScore          int      `json:"long_score"`
-	RecommendationV4   string   `json:"recommendation_v4"`
-	StrongBuy          bool     `json:"strong_buy"`
-	TradeSetup         string   `json:"trade_setup"`
-	ExpectedWindow     string   `json:"expected_window"`
-	ADX                float64  `json:"adx"`
-	RelativeStrength20 float64  `json:"relative_strength_20"`
-	RelativeStrength60 float64  `json:"relative_strength_60"`
-	BenchmarkTicker    string   `json:"benchmark_ticker"`
-	MarketRegime       string   `json:"market_regime"`
-	MarketRegimeScore  int      `json:"market_regime_score"`
-	RewardRisk         float64  `json:"reward_risk"`
-	ProjectedStop      float64  `json:"projected_stop"`
-	ProjectedTarget    float64  `json:"projected_target"`
-	ExtensionATR       float64  `json:"extension_atr"`
-	EarningsRisk       bool     `json:"earnings_risk"`
-	EarningsDays       int      `json:"earnings_days,omitempty"`
-	CCLOnlyRisk        bool     `json:"ccl_only_risk"`
-	LongDataQuality    string   `json:"long_data_quality"`
-	V4Reasons          []string `json:"v4_reasons"`
+	TradingScore           int      `json:"trading_score"`
+	LongScore              int      `json:"long_score"`
+	RecommendationV4       string   `json:"recommendation_v4"`
+	StrongBuy              bool     `json:"strong_buy"`
+	TradeSetup             string   `json:"trade_setup"`
+	ExpectedWindow         string   `json:"expected_window"`
+	ADX                    float64  `json:"adx"`
+	RelativeStrength20     float64  `json:"relative_strength_20"`
+	RelativeStrength60     float64  `json:"relative_strength_60"`
+	BenchmarkTicker        string   `json:"benchmark_ticker"`
+	MarketRegime           string   `json:"market_regime"`
+	MarketRegimeScore      int      `json:"market_regime_score"`
+	RewardRisk             float64  `json:"reward_risk"`
+	ProjectedStop          float64  `json:"projected_stop"`
+	ProjectedTarget        float64  `json:"projected_target"`
+	ExtensionATR           float64  `json:"extension_atr"`
+	EarningsRisk           bool     `json:"earnings_risk"`
+	EarningsDays           int      `json:"earnings_days,omitempty"`
+	CCLOnlyRisk            bool     `json:"ccl_only_risk"`
+	LongDataQuality        string   `json:"long_data_quality"`
+	VIXLevel               float64  `json:"vix_level"`
+	VIXRegime              string   `json:"vix_regime"`
+	Breakout20             bool     `json:"breakout_20"`
+	Trend200Rising         bool     `json:"trend_200_rising"`
+	HistoricalConfidence   string   `json:"historical_confidence"`
+	HistoricalTrades       int      `json:"historical_trades"`
+	HistoricalWinRate      float64  `json:"historical_win_rate"`
+	HistoricalProfitFactor float64  `json:"historical_profit_factor"`
+	HistoricalExpectancyR  float64  `json:"historical_expectancy_r"`
+	HistoricalMaxDrawdown  float64  `json:"historical_max_drawdown"`
+	V4Reasons              []string `json:"v4_reasons"`
 }
 
 type V4Result struct {
@@ -59,14 +69,40 @@ type v4Fundamentals struct {
 }
 
 var (
-	v4FactsMu    sync.Mutex
-	v4FactsCache = map[string]v4Fundamentals{}
+	v4FactsMu         sync.Mutex
+	v4FactsCache      = map[string]v4Fundamentals{}
+	v5ValidationMu    sync.Mutex
+	v5ValidationCache = map[string]v5ValidationCacheItem{}
+	v5VIXMu           sync.Mutex
+	v5VIXCachedAt     time.Time
+	v5VIXLevel        float64
+	v5VIXRegime       string
 )
 
+type v5Validation struct {
+	Confidence   string
+	Trades       int
+	WinRate      float64
+	ProfitFactor float64
+	ExpectancyR  float64
+	MaxDrawdown  float64
+}
+
+type v5ValidationCacheItem struct {
+	Value     v5Validation
+	FetchedAt time.Time
+}
+
 func evaluateV4(r Result) V4Analysis {
-	out := V4Analysis{RecommendationV4: "⚪ SIN DATOS", TradeSetup: "SIN SETUP", ExpectedWindow: "-"}
+	out := V4Analysis{
+		RecommendationV4:     "⚪ SIN DATOS",
+		TradeSetup:           "SIN SETUP",
+		ExpectedWindow:       "-",
+		HistoricalConfidence: "NO EVALUADO",
+		VIXRegime:            "SIN DATOS",
+	}
 	if r.Quote.Price <= 0 || len(r.Quote.Candles) < 60 {
-		out.V4Reasons = []string{"Datos insuficientes para una evaluación V4 confiable."}
+		out.V4Reasons = []string{"Datos insuficientes para una evaluación FARO confiable."}
 		return out
 	}
 
@@ -95,20 +131,32 @@ func evaluateV4(r Result) V4Analysis {
 	out.RelativeStrength20 = v4ReturnPct(baseQ.Candles, 20) - v4ReturnPct(benchQ.Candles, 20)
 	out.RelativeStrength60 = v4ReturnPct(baseQ.Candles, 60) - v4ReturnPct(benchQ.Candles, 60)
 	out.ADX = calcADXV4(r.Quote.Candles, 14)
+	out.VIXLevel, out.VIXRegime = v5VIXContext()
+
+	// FARO: el núcleo del sistema es tendencia + momentum. Las señales aisladas
+	// (RSI, velas, titulares) sólo contextualizan; no disparan una compra por sí solas.
+	out.Trend200Rising = v5SMA200Rising(baseQ.Candles)
+	baseSMA200 := v5SMA(baseQ.Candles, 200)
+	longTrend := baseQ.Price > baseSMA200 && baseSMA200 > 0 && out.Trend200Rising
+	priorHigh20 := v5PriorHigh(baseQ.Candles, 20)
+	out.Breakout20 = priorHigh20 > 0 && baseQ.Price > priorHigh20*1.001
 
 	trendAligned := r.Quote.Price > r.EMA20 && r.EMA20 > r.EMA50 && r.EMA50 > r.EMA200 && r.EMA200 > 0
 	trendSlopes := v4EMASlopeUp(r.Quote.Candles, 20, 5) && v4EMASlopeUp(r.Quote.Candles, 50, 5)
-	momentumHealthy := r.RSI >= 48 && r.RSI <= 72 && r.MACDHist > 0
+	momentumHealthy := r.RSI >= 48 && r.RSI <= 74 && r.MACDHist > 0
 	fastAligned := r.ScoreTiming >= 1 || (r.FastEMA20 > r.FastEMA50 && r.FastMACDHist > 0)
 
 	out.ExtensionATR = 0
 	if r.ATR > 0 && r.EMA20 > 0 && r.Quote.Price > r.EMA20 {
 		out.ExtensionATR = (r.Quote.Price - r.EMA20) / r.ATR
 	}
-	notExtended := out.ExtensionATR <= 1.8
+	notExtended := out.ExtensionATR <= 1.6
 
 	prevSupport, prevResistance := v4PriorSupportResistance(r.Quote.Candles, 60)
 	out.TradeSetup = v4TradeSetup(r, prevResistance, trendAligned, fastAligned)
+	if out.Breakout20 && trendAligned && fastAligned && r.VolumeRatio >= 1.10 {
+		out.TradeSetup = "BREAKOUT 20D FARO"
+	}
 	out.ProjectedStop, _, _ = deriveInitialStop(r.Quote.Price, r, 0)
 	out.ProjectedTarget = v4ProjectedTarget(r, out.TradeSetup, prevSupport, prevResistance)
 	if risk := r.Quote.Price - out.ProjectedStop; risk > 0 && out.ProjectedTarget > r.Quote.Price {
@@ -121,7 +169,7 @@ func evaluateV4(r Result) V4Analysis {
 	}
 	facts := v4Fundamentals{}
 
-	// Detecta CEDEAR cuyo movimiento local parece explicarse principalmente por CCL.
+	// CEDEAR: si la suba local parece explicada principalmente por CCL, se degrada.
 	if r.Asset.Type == "CEDEAR" {
 		local20 := v4ReturnPct(r.Quote.Candles, 20)
 		under20 := v4ReturnPct(baseQ.Candles, 20)
@@ -130,43 +178,40 @@ func evaluateV4(r Result) V4Analysis {
 		out.CCLOnlyRisk = (local20 >= 4 && under20 <= 1 && r.CCLChange20Pct >= 2.5) || distortion >= 12
 	}
 
-	// Trading score 0-100. El score ordena candidatos, pero NO reemplaza los hard gates.
+	// FARO score 0-100. Trend y momentum tienen el mayor peso; RSI/Stoch son secundarios.
 	score := 0
+	if longTrend {
+		score += 25
+	} else if baseQ.Price > baseSMA200 && baseSMA200 > 0 {
+		score += 10
+	}
 	if trendAligned {
-		score += 20
-	} else if r.Quote.Price > r.EMA50 && r.EMA50 > r.EMA200 && r.EMA200 > 0 {
 		score += 10
 	}
 	if trendSlopes {
 		score += 5
 	}
+	if out.Breakout20 {
+		score += 15
+	}
 	switch {
 	case out.ADX >= 30:
-		score += 15
-	case out.ADX >= 25:
-		score += 13
-	case out.ADX >= 22:
-		score += 10
-	case out.ADX >= 18:
-		score += 5
+		score += 8
+	case out.ADX >= 24:
+		score += 6
+	case out.ADX >= 20:
+		score += 4
 	}
 	if r.MACDHist > 0 {
-		score += 7
+		score += 8
 	}
 	if r.RSI >= 50 && r.RSI <= 68 {
-		score += 6
-	} else if r.RSI >= 45 && r.RSI <= 72 {
 		score += 3
-	}
-	if r.StochRSI > 0 && r.StochRSI < 85 {
-		score += 2
+	} else if r.RSI > 75 {
+		score -= 4
 	}
 	if fastAligned {
-		if r.ScoreTiming >= 2 {
-			score += 10
-		} else {
-			score += 7
-		}
+		score += 8
 	}
 	if out.RelativeStrength20 > 3 {
 		score += 8
@@ -174,35 +219,47 @@ func evaluateV4(r Result) V4Analysis {
 		score += 5
 	}
 	if out.RelativeStrength60 > 5 {
-		score += 7
-	} else if out.RelativeStrength60 > 0 {
-		score += 4
-	}
-	if r.VolumeRatio >= 1.25 {
-		score += 10
-	} else if r.VolumeRatio >= 0.80 {
 		score += 6
-	} else if r.VolumeRatio >= 0.60 {
+	} else if out.RelativeStrength60 > 0 {
 		score += 3
 	}
-	if out.TradeSetup == "BREAKOUT CONFIRMADO" || out.TradeSetup == "PULLBACK SANO" {
-		score += 10
+	if r.VolumeRatio >= 1.50 {
+		score += 8
+	} else if r.VolumeRatio >= 1.10 {
+		score += 6
+	} else if r.VolumeRatio >= 0.80 {
+		score += 2
+	}
+	if out.TradeSetup == "BREAKOUT 20D FARO" {
+		score += 7
+	} else if out.TradeSetup == "PULLBACK SANO" {
+		score += 3
 	}
 	if !notExtended {
-		score -= 12
+		score -= 10
 	}
 	if out.MarketRegimeScore >= 4 {
 		score += 5
 	} else if out.MarketRegimeScore <= 1 {
-		score -= 8
+		score -= 7
+	}
+	// VIX es contexto, no gatillo: la propia investigación mostró que filtros de volatilidad
+	// pueden proteger drawdown pero también recortar rentabilidad.
+	switch {
+	case out.VIXLevel > 0 && out.VIXLevel < 22:
+		score += 2
+	case out.VIXLevel >= 30 && out.VIXLevel < 40:
+		score -= 2
+	case out.VIXLevel >= 40:
+		score -= 4
 	}
 	switch {
 	case out.RewardRisk >= 3:
-		score += 10
+		score += 8
 	case out.RewardRisk >= 2:
-		score += 7
+		score += 6
 	case out.RewardRisk >= 1.5:
-		score += 3
+		score += 2
 	default:
 		score -= 8
 	}
@@ -213,8 +270,7 @@ func evaluateV4(r Result) V4Analysis {
 		score -= 15
 	}
 
-	// Primero calculamos largo con precio/tendencia. Sólo pedimos fundamentales/earnings
-	// para candidatos razonables, reduciendo muchísimo llamadas a Yahoo y riesgo de rate-limit.
+	// Largo sigue siendo un motor separado.
 	out.LongScore, out.LongDataQuality = v4LongScore(r, baseQ, benchQ, facts)
 	preTrading := clampInt(score, 0, 100)
 	baseSym := strings.ToUpper(strings.TrimSpace(guessUnderlying(r.Asset.Ticker)))
@@ -228,37 +284,48 @@ func evaluateV4(r Result) V4Analysis {
 	}
 	out.TradingScore = clampInt(score, 0, 100)
 
-	volumeGate := r.VolumeRatio >= 0.75
-	if out.TradeSetup == "BREAKOUT CONFIRMADO" {
-		volumeGate = r.VolumeRatio >= 1.10
-	}
+	volumeGate := r.VolumeRatio >= 1.10
 	cedearGate := true
 	if r.Asset.Type == "CEDEAR" {
 		cedearGate = r.UnderlyingScore >= 3 && r.UnderlyingRSI >= 42 && r.UnderlyingRSI <= 75 && !out.CCLOnlyRisk
 	}
-	setupGate := out.TradeSetup == "BREAKOUT CONFIRMADO" || out.TradeSetup == "PULLBACK SANO"
 	qualityGate := r.Quote.Error == "" && len(r.Quote.Candles) >= 100
 
-	out.StrongBuy = out.TradingScore >= 90 && trendAligned && trendSlopes && out.ADX >= 22 &&
-		momentumHealthy && fastAligned && out.RelativeStrength20 > 0 && out.RelativeStrength60 > 0 &&
-		out.MarketRegimeScore >= 4 && setupGate && volumeGate && notExtended && out.RewardRisk >= 2 &&
+	// "Oportunidad jugosa" es deliberadamente rara: exige FARO breakout, tendencia,
+	// momentum, fuerza relativa, R/R, confirmación 4H y luego validación histórica fuera de muestra.
+	technicalStrong := out.TradingScore >= 90 && longTrend && trendAligned && trendSlopes && out.Breakout20 &&
+		out.ADX >= 20 && momentumHealthy && fastAligned && out.RelativeStrength20 > 0 && out.RelativeStrength60 > 0 &&
+		out.MarketRegimeScore >= 3 && volumeGate && notExtended && out.RewardRisk >= 2 &&
 		!out.EarningsRisk && cedearGate && qualityGate
 
+	if technicalStrong && strings.TrimSpace(factsTicker) != "" {
+		val := v5ValidateFARO(factsTicker)
+		out.HistoricalConfidence = val.Confidence
+		out.HistoricalTrades = val.Trades
+		out.HistoricalWinRate = val.WinRate
+		out.HistoricalProfitFactor = val.ProfitFactor
+		out.HistoricalExpectancyR = val.ExpectancyR
+		out.HistoricalMaxDrawdown = val.MaxDrawdown
+	} else if out.TradingScore >= 80 {
+		out.HistoricalConfidence = "PENDIENTE"
+	}
+
+	out.StrongBuy = technicalStrong && out.HistoricalConfidence == "VALIDADO"
 	out.ExpectedWindow = v4ExpectedWindow(out.TradeSetup, out.ADX, out.StrongBuy)
 	out.RecommendationV4 = v4Recommendation(out)
-	out.V4Reasons = v4Reasons(out, r, trendAligned, trendSlopes, momentumHealthy, fastAligned, volumeGate, setupGate, qualityGate)
+	out.V4Reasons = v4Reasons(out, r, longTrend, trendSlopes, momentumHealthy, fastAligned, volumeGate, out.Breakout20, qualityGate)
 	return out
 }
 
 func v4Recommendation(v V4Analysis) string {
 	if v.StrongBuy && v.LongScore >= 78 {
-		return "🔥 TRADING FUERTE + APTO LARGO"
+		return "🔥 OPORTUNIDAD JUGOSA + APTO LARGO"
 	}
 	if v.StrongBuy {
-		return "🚀 TRADING FUERTE"
+		return "🔥 OPORTUNIDAD JUGOSA"
 	}
-	if v.TradingScore >= 78 && (v.TradeSetup == "BREAKOUT CONFIRMADO" || v.TradeSetup == "PULLBACK SANO") {
-		return "🟢 TRADING"
+	if v.TradingScore >= 82 && v.Breakout20 {
+		return "🟢 TRADING - CERCA"
 	}
 	if v.LongScore >= 78 {
 		return "🏦 LARGO PLAZO"
@@ -270,33 +337,36 @@ func v4Recommendation(v V4Analysis) string {
 }
 
 func v4ExpectedWindow(setup string, adx float64, strong bool) string {
-	if strong && setup == "BREAKOUT CONFIRMADO" && adx >= 30 {
+	if strong && (setup == "BREAKOUT CONFIRMADO" || setup == "BREAKOUT 20D FARO") && adx >= 30 {
 		return "3–8 ruedas"
 	}
-	if strong && setup == "BREAKOUT CONFIRMADO" {
+	if strong && (setup == "BREAKOUT CONFIRMADO" || setup == "BREAKOUT 20D FARO") {
 		return "4–10 ruedas"
 	}
 	if strong && setup == "PULLBACK SANO" {
 		return "4–12 ruedas"
 	}
-	if setup == "BREAKOUT CONFIRMADO" || setup == "PULLBACK SANO" {
+	if setup == "BREAKOUT CONFIRMADO" || setup == "BREAKOUT 20D FARO" || setup == "PULLBACK SANO" {
 		return "5–15 ruedas"
 	}
 	return "sin entrada inmediata"
 }
 
-func v4Reasons(v V4Analysis, r Result, trendAligned, trendSlopes, momentumHealthy, fastAligned, volumeGate, setupGate, qualityGate bool) []string {
+func v4Reasons(v V4Analysis, r Result, longTrend, trendSlopes, momentumHealthy, fastAligned, volumeGate, breakoutGate, qualityGate bool) []string {
 	x := []string{}
 	if v.StrongBuy {
-		x = append(x, fmt.Sprintf("Confluencia V4 completa: Trading %d/100, ADX %.1f y R/R %.2f.", v.TradingScore, v.ADX, v.RewardRisk))
-		x = append(x, fmt.Sprintf("Fuerza relativa positiva vs %s: 20r %+0.1f%% · 60r %+0.1f%%.", v.BenchmarkTicker, v.RelativeStrength20, v.RelativeStrength60))
-		x = append(x, "Diario + 4H + contexto de mercado alineados; señal deliberadamente rara.")
+		x = append(x, fmt.Sprintf("FARO completo: Trading %d/100, ADX %.1f y R/R %.2f.", v.TradingScore, v.ADX, v.RewardRisk))
+		x = append(x, fmt.Sprintf("Validación histórica: %s · %d trades OOS · PF %.2f · Exp %.2fR.", v.HistoricalConfidence, v.HistoricalTrades, v.HistoricalProfitFactor, v.HistoricalExpectancyR))
+		x = append(x, fmt.Sprintf("Fuerza relativa vs %s: 20r %+0.1f%% · 60r %+0.1f%%.", v.BenchmarkTicker, v.RelativeStrength20, v.RelativeStrength60))
 		return x
 	}
-	if !trendAligned || !trendSlopes {
-		x = append(x, "No cumple todavía la tendencia perfecta y ascendente requerida para COMPRA FUERTE.")
+	if !longTrend || !trendSlopes {
+		x = append(x, "Tendencia FARO incompleta: exigimos precio sobre SMA200 ascendente y estructura de corto plazo sana.")
 	}
-	if v.ADX < 22 {
+	if !breakoutGate {
+		x = append(x, "Todavía no rompió el máximo de 20 ruedas: sin breakout FARO no hay alerta jugosa.")
+	}
+	if v.ADX < 20 {
 		x = append(x, fmt.Sprintf("ADX %.1f: tendencia con poca fuerza / riesgo de lateralidad.", v.ADX))
 	}
 	if !momentumHealthy || !fastAligned {
@@ -305,35 +375,35 @@ func v4Reasons(v V4Analysis, r Result, trendAligned, trendSlopes, momentumHealth
 	if v.RelativeStrength20 <= 0 || v.RelativeStrength60 <= 0 {
 		x = append(x, fmt.Sprintf("No lidera con claridad a %s en 20 y 60 ruedas.", v.BenchmarkTicker))
 	}
-	if !setupGate {
-		x = append(x, "No hay breakout confirmado ni pullback sano para entrar ahora.")
-	}
 	if !volumeGate {
-		x = append(x, "Volumen insuficiente para validar la entrada.")
+		x = append(x, "Volumen insuficiente para confirmar la ruptura.")
 	}
-	if v.ExtensionATR > 1.8 {
+	if v.ExtensionATR > 1.6 {
 		x = append(x, fmt.Sprintf("Anti-FOMO: precio extendido %.1f ATR sobre EMA20.", v.ExtensionATR))
 	}
 	if v.RewardRisk < 2 {
-		x = append(x, fmt.Sprintf("Riesgo/beneficio %.2f:1; para señal fuerte exigimos al menos 2:1.", v.RewardRisk))
+		x = append(x, fmt.Sprintf("Riesgo/beneficio %.2f:1; para alerta jugosa exigimos al menos 2:1.", v.RewardRisk))
 	}
-	if v.MarketRegimeScore < 4 {
-		x = append(x, "El mercado/benchmark no está suficientemente alineado para una señal excepcional.")
+	if v.MarketRegimeScore < 3 {
+		x = append(x, "El mercado/benchmark no está suficientemente alineado.")
 	}
 	if v.EarningsRisk {
-		x = append(x, fmt.Sprintf("Evento de resultados próximo (~%d días): no iniciar un swing fuerte antes del evento.", v.EarningsDays))
+		x = append(x, fmt.Sprintf("Resultados próximos (~%d días): no iniciar una señal fuerte antes del evento.", v.EarningsDays))
 	}
 	if v.CCLOnlyRisk {
 		x = append(x, "CEDEAR: parte importante de la suba puede venir del CCL y no del subyacente USA.")
 	}
+	if v.HistoricalConfidence == "DÉBIL" || v.HistoricalConfidence == "EXPERIMENTAL" || v.HistoricalConfidence == "SIN DATOS" {
+		x = append(x, fmt.Sprintf("Validación histórica %s: no habilita Telegram de compra.", v.HistoricalConfidence))
+	}
 	if !qualityGate {
-		x = append(x, "Calidad de datos insuficiente para disparar una COMPRA FUERTE.")
+		x = append(x, "Calidad de datos insuficiente para disparar una oportunidad fuerte.")
 	}
 	if len(x) == 0 {
-		x = append(x, fmt.Sprintf("Trading %d/100: buen candidato, pero no pasa todos los filtros críticos.", v.TradingScore))
+		x = append(x, fmt.Sprintf("Trading %d/100: buen candidato, pero todavía no pasa todos los filtros FARO.", v.TradingScore))
 	}
-	if len(x) > 6 {
-		x = x[:6]
+	if len(x) > 7 {
+		x = x[:7]
 	}
 	return x
 }
@@ -468,6 +538,265 @@ func v4EMASlopeUp(c []Candle, period, back int) bool {
 	now := calcEMA(c, period)
 	past := calcEMA(c[:len(c)-back], period)
 	return now > past && past > 0
+}
+
+func v5SMA(c []Candle, period int) float64 {
+	if period <= 0 || len(c) < period {
+		return 0
+	}
+	s := 0.0
+	for _, x := range c[len(c)-period:] {
+		s += x.Close
+	}
+	return s / float64(period)
+}
+
+func v5SMA200Rising(c []Candle) bool {
+	if len(c) < 225 {
+		return false
+	}
+	now := v5SMA(c, 200)
+	past := v5SMA(c[:len(c)-20], 200)
+	return now > past && past > 0
+}
+
+func v5PriorHigh(c []Candle, lookback int) float64 {
+	if lookback <= 0 || len(c) <= lookback {
+		return 0
+	}
+	start := len(c) - 1 - lookback
+	if start < 0 {
+		start = 0
+	}
+	end := len(c) - 1
+	h := 0.0
+	for _, x := range c[start:end] {
+		v := x.High
+		if v <= 0 {
+			v = x.Close
+		}
+		if v > h {
+			h = v
+		}
+	}
+	return h
+}
+
+func v5PriorLow(c []Candle, lookback int) float64 {
+	if lookback <= 0 || len(c) <= lookback {
+		return 0
+	}
+	start := len(c) - 1 - lookback
+	if start < 0 {
+		start = 0
+	}
+	end := len(c) - 1
+	lo := 0.0
+	for _, x := range c[start:end] {
+		v := x.Low
+		if v <= 0 {
+			v = x.Close
+		}
+		if v > 0 && (lo == 0 || v < lo) {
+			lo = v
+		}
+	}
+	return lo
+}
+
+func v5VIXContext() (float64, string) {
+	v5VIXMu.Lock()
+	defer v5VIXMu.Unlock()
+	if !v5VIXCachedAt.IsZero() && time.Since(v5VIXCachedAt) < 10*time.Minute {
+		return v5VIXLevel, v5VIXRegime
+	}
+	q := fetchYahooChart("^VIX", "3mo", "1d")
+	level := q.Price
+	regime := "SIN DATOS"
+	switch {
+	case level > 0 && level < 20:
+		regime = "CALMO"
+	case level >= 20 && level < 30:
+		regime = "ELEVADO"
+	case level >= 30 && level < 40:
+		regime = "ALTO"
+	case level >= 40:
+		regime = "EXTREMO"
+	}
+	v5VIXCachedAt = time.Now()
+	v5VIXLevel = level
+	v5VIXRegime = regime
+	return level, regime
+}
+
+func v5ValidateFARO(ticker string) v5Validation {
+	ticker = strings.ToUpper(strings.TrimSpace(ticker))
+	if ticker == "" {
+		return v5Validation{Confidence: "SIN DATOS"}
+	}
+	v5ValidationMu.Lock()
+	if c, ok := v5ValidationCache[ticker]; ok && time.Since(c.FetchedAt) < 6*time.Hour {
+		v := c.Value
+		v5ValidationMu.Unlock()
+		return v
+	}
+	v5ValidationMu.Unlock()
+
+	q := fetchYahooChart(ticker, "5y", "1d")
+	v := v5BacktestFARO(q.Candles)
+	v5ValidationMu.Lock()
+	v5ValidationCache[ticker] = v5ValidationCacheItem{Value: v, FetchedAt: time.Now()}
+	v5ValidationMu.Unlock()
+	return v
+}
+
+func v5BacktestFARO(c []Candle) v5Validation {
+	out := v5Validation{Confidence: "SIN DATOS"}
+	if len(c) < 500 {
+		return out
+	}
+	// Se usa únicamente el 30% final como validación fuera de muestra.
+	start := int(float64(len(c)) * 0.70)
+	if start < 240 {
+		start = 240
+	}
+	inTrade := false
+	partial := false
+	entry, stop, risk := 0.0, 0.0, 0.0
+	entryIndex := 0
+	realizedHalfR := 0.0
+	tradeRs := []float64{}
+
+	closeTrade := func(exit float64) {
+		if !inTrade || risk <= 0 || exit <= 0 {
+			return
+		}
+		r := (exit - entry) / risk
+		if partial {
+			r = realizedHalfR + 0.5*r
+		}
+		tradeRs = append(tradeRs, r)
+		inTrade = false
+		partial = false
+		entry, stop, risk = 0, 0, 0
+		realizedHalfR = 0
+	}
+
+	for i := start; i < len(c)-1; i++ {
+		if !inTrade {
+			sub := c[:i+1]
+			sma200 := v5SMA(sub, 200)
+			pastSMA := 0.0
+			if len(sub) > 220 {
+				pastSMA = v5SMA(sub[:len(sub)-20], 200)
+			}
+			priorHigh := v5PriorHigh(sub, 20)
+			atr := calcATR(sub, 20)
+			avgVol := 0.0
+			if i >= 20 {
+				for _, x := range c[i-20 : i] {
+					avgVol += x.Volume
+				}
+				avgVol /= 20
+			}
+			volRatio := 0.0
+			if avgVol > 0 {
+				volRatio = c[i].Volume / avgVol
+			}
+			signal := sma200 > 0 && pastSMA > 0 && c[i].Close > sma200 && sma200 > pastSMA &&
+				priorHigh > 0 && c[i].Close > priorHigh && atr > 0 && volRatio >= 1.10
+			if !signal {
+				continue
+			}
+			nextOpen := c[i+1].Open
+			if nextOpen <= 0 {
+				nextOpen = c[i+1].Close
+			}
+			// Anti-FOMO: si abre demasiado arriba del cierre de ruptura, se omite.
+			if nextOpen <= 0 || nextOpen > c[i].Close+0.5*atr || nextOpen < priorHigh*0.995 {
+				continue
+			}
+			entry = nextOpen
+			risk = 2 * atr
+			stop = entry - risk
+			entryIndex = i + 1
+			inTrade = true
+			partial = false
+			realizedHalfR = 0
+			continue
+		}
+
+		if c[i].Low > 0 && c[i].Low <= stop {
+			closeTrade(stop)
+			continue
+		}
+		if !partial && c[i].High >= entry+2*risk {
+			partial = true
+			realizedHalfR = 1.0 // 50% realizado a +2R.
+			if stop < entry {
+				stop = entry
+			}
+		}
+		low10 := v5PriorLow(c[:i+1], 10)
+		if low10 > 0 && c[i].Close < low10 {
+			closeTrade(c[i].Close)
+			continue
+		}
+		if i-entryIndex >= 80 {
+			closeTrade(c[i].Close)
+			continue
+		}
+		if i == len(c)-2 {
+			closeTrade(c[i].Close)
+		}
+	}
+
+	out.Trades = len(tradeRs)
+	if out.Trades == 0 {
+		return out
+	}
+	wins := 0
+	grossWin, grossLoss, sumR := 0.0, 0.0, 0.0
+	equity, peak, maxDD := 1.0, 1.0, 0.0
+	for _, r := range tradeRs {
+		sumR += r
+		if r > 0 {
+			wins++
+			grossWin += r
+		} else {
+			grossLoss += -r
+		}
+		// Drawdown comparable asumiendo 1% de riesgo de capital por operación.
+		equity *= 1 + r*0.01
+		if equity > peak {
+			peak = equity
+		}
+		if peak > 0 {
+			dd := (peak - equity) / peak * 100
+			if dd > maxDD {
+				maxDD = dd
+			}
+		}
+	}
+	out.WinRate = float64(wins) / float64(out.Trades) * 100
+	out.ExpectancyR = sumR / float64(out.Trades)
+	out.MaxDrawdown = maxDD
+	if grossLoss > 0 {
+		out.ProfitFactor = grossWin / grossLoss
+	} else if grossWin > 0 {
+		out.ProfitFactor = 9.99
+	}
+	switch {
+	case out.Trades >= 6 && out.ProfitFactor >= 1.25 && out.ExpectancyR >= 0.10 && out.MaxDrawdown <= 12:
+		out.Confidence = "VALIDADO"
+	case out.Trades >= 4 && out.ProfitFactor >= 1.0 && out.ExpectancyR > 0:
+		out.Confidence = "EXPERIMENTAL"
+	case out.Trades >= 4:
+		out.Confidence = "DÉBIL"
+	default:
+		out.Confidence = "SIN DATOS"
+	}
+	return out
 }
 
 func calcADXV4(c []Candle, period int) float64 {
