@@ -4,6 +4,7 @@ const DEFAULTS = {
   alert_history: [],
   last_prices: { prices: {} },
   buy_alerts_state: {},
+  fixed_income: { instruments: [] },
   portfolio_snapshot: null,
   market_snapshot: null,
 };
@@ -236,6 +237,41 @@ async function handleApi(request, env, url, ctx) {
   if (request.method === 'GET' && url.pathname === '/api/snapshot/portfolio') {
     const item = await env.SNAPSHOTS.getWithMetadata('portfolio_snapshot');
     return new Response(item?.value || '{}', { headers: { 'content-type':'application/json; charset=utf-8', 'cache-control':'no-store', 'x-snapshot-version':String(item?.metadata?.version || '') } });
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/fixed-income') {
+    const store = (await getBlob(env.DB, 'fixed_income')) || DEFAULTS.fixed_income;
+    return json({ instruments: Array.isArray(store?.instruments) ? store.instruments : [] });
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/fixed-income/save') {
+    let body;
+    try { body = await request.json(); } catch { return json({ error: 'json inválido' }, 400); }
+    const ticker = String(body?.ticker || '').trim().toUpperCase();
+    if (!ticker) return json({ error: 'ticker requerido' }, 400);
+    const serialized = JSON.stringify(body || {});
+    if (serialized.length > 500000) return json({ error: 'registro demasiado grande' }, 413);
+    const store = (await getBlob(env.DB, 'fixed_income')) || { instruments: [] };
+    if (!Array.isArray(store.instruments)) store.instruments = [];
+    const record = { ...body, ticker, updated_at: new Date().toISOString() };
+    const idx = store.instruments.findIndex(x => String(x?.ticker || '').toUpperCase() === ticker);
+    if (idx >= 0) store.instruments[idx] = record; else store.instruments.push(record);
+    // Evita que una lista manual crezca sin control en D1.
+    store.instruments = store.instruments.slice(-100);
+    await putBlob(env.DB, 'fixed_income', store);
+    return json({ ok: true, ticker, count: store.instruments.length });
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/fixed-income/delete') {
+    let body;
+    try { body = await request.json(); } catch { return json({ error: 'json inválido' }, 400); }
+    const ticker = String(body?.ticker || '').trim().toUpperCase();
+    if (!ticker) return json({ error: 'ticker requerido' }, 400);
+    const store = (await getBlob(env.DB, 'fixed_income')) || { instruments: [] };
+    if (!Array.isArray(store.instruments)) store.instruments = [];
+    store.instruments = store.instruments.filter(x => String(x?.ticker || '').toUpperCase() !== ticker);
+    await putBlob(env.DB, 'fixed_income', store);
+    return json({ ok: true, count: store.instruments.length });
   }
 
   if (request.method === 'POST' && url.pathname === '/api/portfolio/save') {
